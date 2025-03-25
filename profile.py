@@ -56,7 +56,7 @@ pc.defineParameter(
     portal.ParameterType.INTEGER, 0,
     longDescription="The size of storage to mount at /mydata. 0 means no extra storage.")
 
-# New parameters for NFS discovery across experiments:
+# New parameters for cross-experiment NFS discovery:
 pc.defineParameter(
     "nfs_discovery_ip", "NFS Discovery IP",
     portal.ParameterType.STRING, "10.254.254.1",
@@ -154,14 +154,14 @@ for i in range(params.node_count):
     else:
         # No extra disk space; try to discover an existing external NFS storage
         # If one exists, mount it; otherwise, have node-0 host the NFS share.
-        node.addService(pg.Execute(shell="sh", command=f"""
-            # Check for an existing NFS storage by pinging the discovery IP: {params.nfs_discovery_ip}
-            if ping -c 1 {params.nfs_discovery_ip} > /dev/null 2>&1; then
-                echo "External NFS storage detected at {params.nfs_discovery_ip}"
+        node.addService(pg.Execute(shell="sh", command="""
+            # Check for an existing NFS storage by pinging the discovery IP: {nfs_discovery_ip}
+            if ping -c 1 {nfs_discovery_ip} > /dev/null 2>&1; then
+                echo "External NFS storage detected at {nfs_discovery_ip}"
                 sudo mkdir -p /mydata
-                sudo mount -t nfs {params.nfs_discovery_ip}:{params.nfs_export} /mydata
+                sudo mount -t nfs {nfs_discovery_ip}:{nfs_export} /mydata
                 sudo chmod 777 /mydata
-                echo "Mounted external NFS storage from {params.nfs_discovery_ip}" >> /var/log/shared-nfs-setup.log
+                echo "Mounted external NFS storage from {nfs_discovery_ip}" >> /var/log/shared-nfs-setup.log
             else
                 # No external NFS detected. Use node-0 to host the NFS share.
                 if [ "$(hostname)" = "node-0" ]; then
@@ -177,12 +177,12 @@ for i in range(params.node_count):
                     sleep 20
                     sudo mkdir -p /mydata
                     # Assuming node-0 is reachable by its hostname on the shared network.
-                    sudo mount -t nfs node-0:{params.nfs_export} /mydata
+                    sudo mount -t nfs node-0:{nfs_export} /mydata
                     sudo chmod 777 /mydata
                     echo "Mounted local NFS storage from node-0" >> /var/log/shared-nfs-setup.log
                 fi
             fi
-        """))
+        """.format(nfs_discovery_ip=params.nfs_discovery_ip, nfs_export=params.nfs_export)))
     
     if params.routableIP:
         node.routable_control_ip = True
