@@ -56,16 +56,15 @@ pc.defineParameter(
     portal.ParameterType.INTEGER, 0,
     longDescription="The size of storage to mount at /mydata. 0 means no extra storage.")
 
-# New parameters for external shared NFS mount (persistent across experiments)
+# New parameters for NFS discovery across experiments:
 pc.defineParameter(
-    "nfs_server", "NFS Server",
-    portal.ParameterType.STRING, "nfssrv.example.com",
-    longDescription="The NFS server that hosts the shared /mydata directory.")
-
+    "nfs_discovery_ip", "NFS Discovery IP",
+    portal.ParameterType.STRING, "10.254.254.1",
+    longDescription="The IP address to check for an existing NFS storage across experiments.")
 pc.defineParameter(
     "nfs_export", "NFS Export Path",
-    portal.ParameterType.STRING, "/users/pgrigo01/nfsshare",
-    longDescription="The exported path on the NFS server.")
+    portal.ParameterType.STRING, "/mydata",
+    longDescription="The export path to mount from the discovered NFS server.")
 
 pc.defineStructParameter(
     "sharedVlans", "Add Shared VLAN", [],
@@ -145,20 +144,44 @@ for i in range(params.node_count):
         bs.size = str(params.extra_disk_space) + "GB"
         bs.placement = "any"
         
-        # Add startup script for blockstore initialization
+        # Startup script to initialize the local blockstore
         node.addService(pg.Execute(shell="sh", command="""
             sudo mkdir -p /mydata
             sudo chmod 777 /mydata
             echo "Dataset ready for population at /mydata" > /mydata/README.txt
-            echo "[$(date)] Storage setup complete" >> /var/log/storage-setup.log
+            echo "[$(date)] Local blockstore storage setup complete" >> /var/log/storage-setup.log
         """))
     else:
-        # No extra disk; mount the external shared NFS so storage persists across experiments
+        # No extra disk space; try to discover an existing external NFS storage
+        # If one exists, mount it; otherwise, have node-0 host the NFS share.
         node.addService(pg.Execute(shell="sh", command=f"""
-            sudo mkdir -p /mydata
-            sudo mount -t nfs {params.nfs_server}:{params.nfs_export} /mydata
-            sudo chmod 777 /mydata
-            echo "Shared NFS mounted at /mydata" >> /var/log/shared-nfs-setup.log
+            # Check for an existing NFS storage by pinging the discovery IP: {params.nfs_discovery_ip}
+            if ping -c 1 {params.nfs_discovery_ip} > /dev/null 2>&1; then
+                echo "External NFS storage detected at {params.nfs_discovery_ip}"
+                sudo mkdir -p /mydata
+                sudo mount -t nfs {params.nfs_discovery_ip}:{params.nfs_export} /mydata
+                sudo chmod 777 /mydata
+                echo "Mounted external NFS storage from {params.nfs_discovery_ip}" >> /var/log/shared-nfs-setup.log
+            else
+                # No external NFS detected. Use node-0 to host the NFS share.
+                if [ "$(hostname)" = "node-0" ]; then
+                    echo "No external NFS found; hosting local NFS storage on node-0"
+                    sudo mkdir -p /mydata
+                    sudo apt-get update && sudo apt-get install -y nfs-kernel-server
+                    echo "/mydata *(rw,sync,no_subtree_check)" | sudo tee /etc/exports
+                    sudo exportfs -a
+                    sudo systemctl restart nfs-kernel-server
+                    echo "Local NFS storage hosted on node-0" >> /var/log/shared-nfs-setup.log
+                else
+                    echo "Waiting for node-0 to host NFS storage..."
+                    sleep 20
+                    sudo mkdir -p /mydata
+                    # Assuming node-0 is reachable by its hostname on the shared network.
+                    sudo mount -t nfs node-0:{params.nfs_export} /mydata
+                    sudo chmod 777 /mydata
+                    echo "Mounted local NFS storage from node-0" >> /var/log/shared-nfs-setup.log
+                fi
+            fi
         """))
     
     if params.routableIP:
