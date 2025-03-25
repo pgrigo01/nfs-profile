@@ -23,12 +23,14 @@ request = pc.makeRequestRSpec()
 
 # Client image list
 imageList = [
+    ('urn:publicid:IDN+emulab.net+image+emulab-ops//UBUNTU24-64-STD', 'UBUNTU 24.04'),
     ('urn:publicid:IDN+emulab.net+image+emulab-ops//UBUNTU20-64-STD', 'UBUNTU 20.04'),
     ('urn:publicid:IDN+emulab.net+image+emulab-ops//UBUNTU22-64-STD', 'UBUNTU 22.04'),
 ]
 
 # Server image list, not tested with CentOS
 imageList2 = [
+    ('urn:publicid:IDN+emulab.net+image+emulab-ops//UBUNTU24-64-STD', 'UBUNTU 24.04'),
     ('urn:publicid:IDN+emulab.net+image+emulab-ops//UBUNTU20-64-STD', 'UBUNTU 20.04'),
     ('urn:publicid:IDN+emulab.net+image+emulab-ops//UBUNTU22-64-STD', 'UBUNTU 22.04'),
 
