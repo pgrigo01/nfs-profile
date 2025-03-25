@@ -1,121 +1,202 @@
-"""This profile sets up an NFS server that can be accessed from other experiments. The NFS server 
-uses persistent storage that will remain available even after this experiment is terminated.
-
-Instructions:
-- The NFS server will have both an internal interface (for clients in this experiment) 
-  and a public interface (for clients in other experiments)
-- Your shared NFS directory is mounted at `/nfs` on all nodes
-- To access from other experiments, use the public IP address of the NFS server
-- The server hostname 'nfs' will be resolvable within CloudLab"""
-
 # Import the Portal object.
 import geni.portal as portal
 # Import the ProtoGENI library.
 import geni.rspec.pg as pg
+# Import the InstaGENI library.
+import geni.rspec.igext as ig
 # Import the Emulab specific extensions.
 import geni.rspec.emulab as emulab
 
-# Create a portal context.
+# Create a portal object,
 pc = portal.Context()
 
-# Create a Request object to start building the RSpec.
-request = pc.makeRequestRSpec()
-
-# Client image list
-imageList = [
-    ('urn:publicid:IDN+emulab.net+image+emulab-ops//UBUNTU24-64-STD', 'UBUNTU 24.04'),
-    ('urn:publicid:IDN+emulab.net+image+emulab-ops//UBUNTU20-64-STD', 'UBUNTU 20.04'),
-    ('urn:publicid:IDN+emulab.net+image+emulab-ops//UBUNTU22-64-STD', 'UBUNTU 22.04'),
+agglist = [
+    ("urn:publicid:IDN+emulab.net+authority+cm", "emulab.net"),
+    ("urn:publicid:IDN+utah.cloudlab.us+authority+cm", "utah.cloudlab.us"),
+    ("urn:publicid:IDN+clemson.cloudlab.us+authority+cm", "clemson.cloudlab.us"),
+    ("urn:publicid:IDN+wisc.cloudlab.us+authority+cm", "wisc.cloudlab.us"),
+    ("urn:publicid:IDN+apt.emulab.net+authority+cm", "apt.emulab.net"),
+    ("", "Any")
 ]
 
-# Server image list, not tested with CentOS
-imageList2 = [
+imagelist = [
     ('urn:publicid:IDN+emulab.net+image+emulab-ops//UBUNTU24-64-STD', 'UBUNTU 24.04'),
-    ('urn:publicid:IDN+emulab.net+image+emulab-ops//UBUNTU20-64-STD', 'UBUNTU 20.04'),
     ('urn:publicid:IDN+emulab.net+image+emulab-ops//UBUNTU22-64-STD', 'UBUNTU 22.04'),
-
+    ('urn:publicid:IDN+emulab.net+image+emulab-ops//UBUNTU20-64-STD', 'UBUNTU 20.04'),
+    ('urn:publicid:IDN+emulab.net+image+emulab-ops//CENTOS7-64-STD', 'CENTOS 7'),
+    ('urn:publicid:IDN+emulab.net+image+emulab-ops//FBSD113-64-STD', 'FreeBSD 11.3')
 ]
 
-# Do not change these unless you change the setup scripts too.
-nfsServerName = "nfs"
-nfsLanName    = "nfsLan"
-nfsDirectory  = "/nfs"
+# Define node count parameter
+pc.defineParameter(
+    "node_count", "Number of Nodes",
+    portal.ParameterType.INTEGER,
+    1,  # Default to 1 node
+    longDescription="Number of nodes to create (1-10)")
 
-# Number of NFS clients (there is always a server)
-pc.defineParameter("clientCount", "Number of NFS clients",
-                   portal.ParameterType.INTEGER, 2)
+pc.defineParameter(
+    "aggregate", "Specific Aggregate",
+    portal.ParameterType.STRING,
+    agglist[0][0], agglist)
 
-pc.defineParameter("osImage", "Select OS image for clients",
-                   portal.ParameterType.IMAGE,
-                   imageList[0], imageList)
+pc.defineParameter(
+    "image", "Node Image",
+    portal.ParameterType.IMAGE,
+    imagelist[0][0],
+    imagelist,
+    longDescription="The image your nodes will run.")
 
-pc.defineParameter("osServerImage", "Select OS image for server",
-                   portal.ParameterType.IMAGE,
-                   imageList2[0], imageList2)
+pc.defineParameter(
+    "routableIP", "Routable IP",
+    portal.ParameterType.BOOLEAN, False,
+    longDescription="Add a routable IP to each VM.")
 
-pc.defineParameter("nfsSize", "Size of NFS Storage",
-                   portal.ParameterType.STRING, "200GB",
-                   longDescription="Size of disk partition to allocate on NFS server")
+pc.defineParameter(
+    "extra_disk_space", "Extra Disk Space (GB)",
+    portal.ParameterType.INTEGER, 0,
+    longDescription="The size of storage to mount at /mydata. 0 means no extra storage.")
 
-pc.defineParameter("usePersistentStorage", "Use persistent storage",
-                   portal.ParameterType.BOOLEAN, True,
-                   longDescription="Check to use persistent storage that will remain available after experiment termination")
+# New parameters for external shared NFS mount (persistent across experiments)
+pc.defineParameter(
+    "nfs_server", "NFS Server",
+    portal.ParameterType.STRING, "nfssrv.example.com",
+    longDescription="The NFS server that hosts the shared /mydata directory.")
 
-pc.defineParameter("allowExternalAccess", "Allow external NFS access",
-                   portal.ParameterType.BOOLEAN, True,
-                   longDescription="Check to allow NFS access from other experiments")
+pc.defineParameter(
+    "nfs_export", "NFS Export Path",
+    portal.ParameterType.STRING, "/users/pgrigo01/nfsshare",
+    longDescription="The exported path on the NFS server.")
 
-pc.defineParameter("externalNetworks", "Networks allowed for external access",
-                   portal.ParameterType.STRING, "10.0.0.0/8 172.16.0.0/12 192.168.0.0/16",
-                   longDescription="Space-separated list of networks in CIDR notation allowed to access NFS")
+pc.defineStructParameter(
+    "sharedVlans", "Add Shared VLAN", [],
+    multiValue=True, itemDefaultValue={}, min=0, max=None,
+    members=[
+        portal.Parameter(
+            "createSharedVlan", "Create Shared VLAN",
+            portal.ParameterType.BOOLEAN, False,
+            longDescription="Create a new shared VLAN with the name above."),
+        portal.Parameter(
+            "connectSharedVlan", "Connect to Shared VLAN",
+            portal.ParameterType.BOOLEAN, False,
+            longDescription="Connect an existing shared VLAN with the name below."),
+        portal.Parameter(
+            "name", "Shared VLAN Name",
+            portal.ParameterType.STRING, "",
+            longDescription="Shared VLAN name (must be fewer than 32 alphanumeric characters)."),
+        portal.Parameter(
+            "ip_address", "Shared VLAN IP Address",
+            portal.ParameterType.STRING, "10.254.254.1",
+            longDescription="IP address for the shared VLAN interface."),
+        portal.Parameter(
+            "subnet_mask", "Shared VLAN Netmask",
+            portal.ParameterType.STRING, "255.255.255.0",
+            longDescription="Subnet mask for the shared VLAN interface.")
+    ])
 
-# Always need this when using parameters
 params = pc.bindParameters()
 
-# The NFS network. All these options are required.
-nfsLan = request.LAN(nfsLanName)
-nfsLan.best_effort       = True
-nfsLan.vlan_tagging      = True
-nfsLan.link_multiplexing = True
+# Parameter validation
+if params.node_count < 1 or params.node_count > 10:
+    pc.reportError(portal.ParameterError("Invalid number of nodes (must be between 1 and 10)"))
 
-# The NFS server.
-nfsServer = request.RawPC(nfsServerName)
-nfsServer.disk_image = params.osServerImage
+i = 0
+for x in params.sharedVlans:
+    n = 0
+    if x.createSharedVlan:
+        n += 1
+    if x.connectSharedVlan:
+        n += 1
+    if n > 1:
+        err = portal.ParameterError(
+            "Must choose only a single shared vlan operation (create, connect)",
+            ['sharedVlans[%d].createSharedVlan' % (i,),
+             'sharedVlans[%d].connectSharedVlan' % (i,)])
+        pc.reportError(err)
+    if n == 0:
+        err = portal.ParameterError(
+            "Must choose one of the shared vlan operations: create, connect",
+            ['sharedVlans[%d].createSharedVlan' % (i,),
+             'sharedVlans[%d].connectSharedVlan' % (i,)])
+        pc.reportError(err)
+    i += 1
 
-# Add a public interface to the NFS server if external access is enabled
-if params.allowExternalAccess:
-    nfsServer.routable_control_ip = True
+pc.verifyParameters()
 
-# Attach server to lan for internal access
-nfsLan.addInterface(nfsServer.addInterface())
+# Create a Request object
+request = pc.makeRequestRSpec()
 
-# Storage: either persistent or ephemeral depending on user choice
-if params.usePersistentStorage:
-    # Use a persistent dataset
-    nfsBS = nfsServer.Blockstore("nfsBS", nfsDirectory)
-    nfsBS.size = params.nfsSize
-    nfsBS.persistent = True
-else:
-    # Use a temporary blockstore (original behavior)
-    nfsBS = nfsServer.Blockstore("nfsBS", nfsDirectory)
-    nfsBS.size = params.nfsSize
+tour = ig.Tour()
+tour.Description(ig.Tour.TEXT, 
+    "Create %d VM(s) with optional storage and VLAN connectivity." % params.node_count)
+request.addTour(tour)
 
-# Pass the external access parameters to the server setup script
-nfsServerCmd = "sudo /bin/bash /local/repository/nfs-server.sh"
-if params.allowExternalAccess:
-    nfsServerCmd += " --external-access=yes --allowed-networks='" + params.externalNetworks + "'"
+# Create multiple nodes
+nodes = []
+sharedvlans = []
 
-# Initialization script for the server
-nfsServer.addService(pg.Execute(shell="sh", command=nfsServerCmd))
+for i in range(params.node_count):
+    node = ig.XenVM("node-%d" % i)
+    node.disk_image = params.image
+    node.exclusive = False
 
-# The NFS clients, also attached to the NFS lan.
-for i in range(1, params.clientCount+1):
-    node = request.RawPC("node%d" % i)
-    node.disk_image = params.osImage
-    nfsLan.addInterface(node.addInterface())
-    # Initialization script for the clients
-    node.addService(pg.Execute(shell="sh", command="sudo /bin/bash /local/repository/nfs-client.sh"))
-    pass
+    if params.extra_disk_space > 0:
+        # Attach a blockstore at /mydata if extra storage is requested
+        bs = node.Blockstore("bs-%d" % i, "/mydata")
+        bs.size = str(params.extra_disk_space) + "GB"
+        bs.placement = "any"
+        
+        # Add startup script for blockstore initialization
+        node.addService(pg.Execute(shell="sh", command="""
+            sudo mkdir -p /mydata
+            sudo chmod 777 /mydata
+            echo "Dataset ready for population at /mydata" > /mydata/README.txt
+            echo "[$(date)] Storage setup complete" >> /var/log/storage-setup.log
+        """))
+    else:
+        # No extra disk; mount the external shared NFS so storage persists across experiments
+        node.addService(pg.Execute(shell="sh", command=f"""
+            sudo mkdir -p /mydata
+            sudo mount -t nfs {params.nfs_server}:{params.nfs_export} /mydata
+            sudo chmod 777 /mydata
+            echo "Shared NFS mounted at /mydata" >> /var/log/shared-nfs-setup.log
+        """))
+    
+    if params.routableIP:
+        node.routable_control_ip = True
+    if params.aggregate:
+        node.component_manager_id = params.aggregate
 
-# Print the RSpec to the enclosing page.
+    # Configure VLANs for each node
+    k = 0
+    for x in params.sharedVlans:
+        iface = node.addInterface("ifSharedVlan%d" % (k,))
+        if x.ip_address:
+            # Increment last octet of IP for each node
+            ip_parts = x.ip_address.split('.')
+            ip_parts[3] = str(int(ip_parts[3]) + i)
+            node_ip = '.'.join(ip_parts)
+            iface.addAddress(pg.IPv4Address(node_ip, x.subnet_mask))
+        
+        # Only create/connect VLAN once (on first node)
+        if i == 0:
+            sharedvlan = pg.Link('shared-vlan-%d' % (k,))
+            sharedvlan.addInterface(iface)
+            if x.createSharedVlan:
+                sharedvlan.createSharedVlan(x.name)
+            else:
+                sharedvlan.connectSharedVlan(x.name)
+            sharedvlan.link_multiplexing = True
+            sharedvlan.best_effort = True
+            sharedvlans.append(sharedvlan)
+        else:
+            # Add interfaces of other nodes to existing VLANs
+            sharedvlans[k].addInterface(iface)
+        k += 1
+
+    nodes.append(node)
+    request.addResource(node)
+
+for sv in sharedvlans:
+    request.addResource(sv)
+
 pc.printRequestRSpec(request)
